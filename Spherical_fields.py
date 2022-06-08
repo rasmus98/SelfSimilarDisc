@@ -1,3 +1,5 @@
+import numba
+import numpy as np
 
 #performes central differences differentiation in theta direction
 @numba.njit
@@ -7,7 +9,7 @@ def diff(array, dtheta):
 @numba.njit
 def cylindrical_to_spherical(values, theta_grid, a):
     return values / np.cos(theta_grid)**a
-
+        
 @numba.njit
 def pad(values, amount, constant=True):
     res = np.empty(len(values) + 2*amount)
@@ -20,8 +22,7 @@ def pad(values, amount, constant=True):
             res[amount-i-1] = (i+1) * values[0] - values[1]
         res[:amount] = values[0]
         res[-amount:] = values[-1]
-    return res
-        
+    return res    
 
 # represents a scale invariant vector field, and provides assosiated vector operations
 # ie a field such that f(r,theta,phi)=val(theta)*(r/r_0)**a
@@ -132,6 +133,10 @@ class VectorField:
     
     def norm(f):
         return (f.v_r**2+f.v_theta**2+f.v_phi**2)**0.5
+    
+    #returns data at cylendrical radius R
+    def as_cylendrical(f, R=1):
+        return (R*np.sin(f.theta_grid))**f.a*f.v
 
 # represents a scale invariant vector field, and provides assosiated vector operations
 # ie a field such that f(r,theta,phi)=val(theta)*(r/r_0)**a
@@ -175,7 +180,8 @@ class ScalarField:
         elif type(g) is ScalarField:
             return ScalarField(f.v*g.v, f.a+g.a, f.theta_grid)
         else: #scalar
-            return VectorField(f.v*g, f.a, f.theta_grid)
+            return ScalarField(f.v*g, f.a, f.theta_grid)
+        
 
     # vector field / scalar field 
     # scalar field / float 

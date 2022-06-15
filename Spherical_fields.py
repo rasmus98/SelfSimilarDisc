@@ -8,7 +8,7 @@ def diff(array, dtheta):
 
 @numba.njit
 def cylindrical_to_spherical(values, theta_grid, a):
-    return values / np.cos(theta_grid)**a
+    return values / np.cos(theta_grid-np.pi/2)**a
         
 @numba.njit
 def pad(values, amount, constant=True):
@@ -18,10 +18,9 @@ def pad(values, amount, constant=True):
         res[:amount] = values[0]
         res[-amount:] = values[-1]
     else:
-        for i in range(amount):
-            res[amount-i-1] = (i+1) * values[0] - values[1]
-        res[:amount] = values[0]
-        res[-amount:] = values[-1]
+        for i in range(1,amount+1):
+            res[amount -i]   = values[0] + i * (values[0] - values[1])
+            res[-1-(amount - i)] = values[-1] + i * (values[-1] - values[-2])
     return res    
 
 # represents a scale invariant vector field, and provides assosiated vector operations
@@ -30,11 +29,9 @@ def pad(values, amount, constant=True):
 #@numba.experimental.jitclass([("v_r", numba.float64[:]), ("v_theta", numba.float64[:]), ("v_phi", numba.float64[:]), ("a", numba.float64), ("dtheta", numba.float64), ("theta_grid", numba.float64[:])])
 class VectorField:
     def __init__(self, v_r, v_theta, v_phi, a, theta_grid, prescription="spherical"):
-        #assert (prescription in ["theta", "z"]), f"val must be prescibed as either Q(z/R) or Q(theta). was given Q({prescription})"
-        #theta_diff = np.diff(theta_grid)
-        #assert (np.max(theta_diff) - np.min(theta_diff)) < 1e-6, "all theta values must be identical"
-        #else:
-        #    self.val = np.zeros_like(theta_grid) + val
+        #assert (prescription in ["spherical", "cylindrical"]), f"val must be prescibed as either Q(z/R) or Q(theta). was given {prescription}"
+        theta_diff = np.diff(theta_grid)
+        #assert (np.abs(np.max(theta_diff)/ np.min(theta_diff)) - 1) < 1e-3, "all theta values must be identical"
         if prescription == "spherical":
             self.v_r = v_r
             self.v_theta = v_theta
@@ -56,23 +53,31 @@ class VectorField:
     # method for extracting a part of the field. Usually usefull for cutting off the edges
     def __getitem__(self, key):
         return VectorField(self.v_r[key], self.v_theta[key], self.v_phi[key], self.a, self.theta_grid[key])
-            
+    
+    @property
+    def r(self):
+        return ScalarField(self.v_r, self.a, self.theta_grid)
+    @property
+    def theta(self):
+        return ScalarField(self.v_theta, self.a, self.theta_grid)
+    @property
+    def phi(self):
+        return ScalarField(self.v_phi, self.a, self.theta_grid)
+                
     def div(f):
         f_tilde = (f.a+2)*f.v_r[1:-1] \
                 + 1/np.sin(f.theta_grid[1:-1])*diff(np.sin(f.theta_grid) * f.v_theta, f.dtheta)
         return ScalarField(f_tilde, f.a-1, f.theta_grid[1:-1])
     
-    #Implements directional deriv (g \cdot \nabla f) as f.direction_deriv(g)
-    def direction_deriv(f, g): 
-        cot = 1/np.tan(f.theta_grid[1:-1])
-        g_new = g[1:-1]
-        res_r     = (g_new * ScalarField(f.v_r, f.a, f.theta_grid).grad()).v     \
-                    - g_new.v_theta * f.v_theta[1:-1] - g_new.v_phi*f.v_phi[1:-1]
-        res_theta = (g_new * ScalarField(f.v_theta, f.a, f.theta_grid).grad()).v \
-                    - g_new.v_theta * f.v_r[1:-1] - g_new.v_phi*f.v_phi[1:-1]*cot
-        res_phi   = (g_new * ScalarField(f.v_phi, f.a, f.theta_grid).grad()).v   \
-                    - g_new.v_phi  *  f.v_r[1:-1] + g_new.v_phi*f.v_theta[1:-1]*cot
-        return VectorField(res_r, res_theta, res_phi, g.a+f.a-1, g_new.theta_grid)
+    #Implements tensor deriv \nabla\cdot(g \otimes f) as f.direction_deriv(g)
+    def tensor_deriv(f, g): 
+        cot = 1/np.tan(f.theta_grid)
+        res_r     = (f*g.r).div().v   - (f.v_theta*g.v_theta + f.v_phi * g.v_phi)[1:-1]
+        res_theta = (f*g.theta).div().v   + (f.v_theta*g.v_r - cot*f.v_phi * g.v_phi)[1:-1]
+        res_phi   = (f*g.phi).div().v + (f.v_phi*g.v_r + cot*f.v_phi * g.v_theta)[1:-1]
+        #print((f*g.r).div().v)
+        #print((f.v_theta*g.v_theta + f.v_phi * g.v_phi)[1:-1])
+        return VectorField(res_r, res_theta, res_phi, g.a+f.a-1, f.theta_grid[1:-1])
     
     def curl(f):
         f_new = f[1:-1]
@@ -105,7 +110,6 @@ class VectorField:
     
     def cross(f, g):
         #assert np.all(np.isclose(f.theta_grid, g.theta_grid)), "need to be defined on the same domain"
-        #assert f.val.shape == g.val.shape and f.val.ndim == 2, "need to both be vector fields"
         return VectorField(f.v_theta*g.v_phi-f.v_phi*f.v_theta,
                            f.v_phi*g.v_r-f.v_r*g.v_phi,
                            f.v_r*g.v_theta-f.v_theta*f.v_r, 
@@ -113,7 +117,6 @@ class VectorField:
     
     def __add__(f, g):
         #assert np.all(np.isclose(f.theta_grid, g.theta_grid)), "need to be defined on the same domain"
-        #assert f.val.shape == g.val.shape,  f"need to have the same shape. has {f.val.shape} and {g.val.shape}"
         #assert f.a == g.a, f"need to have the same power index. has {f.a} and {g.a}"
         return VectorField(f.v_r+g.v_r, f.v_theta+g.v_theta, f.v_phi+g.v_phi, f.a, f.theta_grid)
     
@@ -133,10 +136,6 @@ class VectorField:
     
     def norm(f):
         return (f.v_r**2+f.v_theta**2+f.v_phi**2)**0.5
-    
-    #returns data at cylendrical radius R
-    def as_cylendrical(f, R=1):
-        return (R*np.sin(f.theta_grid))**f.a*f.v
 
 # represents a scale invariant vector field, and provides assosiated vector operations
 # ie a field such that f(r,theta,phi)=val(theta)*(r/r_0)**a
@@ -144,11 +143,9 @@ class VectorField:
 #@numba.experimental.jitclass([("v", numba.float64[:]), ("a", numba.float64), ("dtheta", numba.float64), ("theta_grid", numba.float64[:])])
 class ScalarField:
     def __init__(self, v, a, theta_grid, prescription="spherical"):
-        #assert (prescription in ["theta", "z"]), f"val must be prescibed as either Q(z/R) or Q(theta). was given Q({prescription})"
-        #theta_diff = np.diff(theta_grid)
-        #assert (np.max(theta_diff) - np.min(theta_diff)) < 1e-6, "all theta values must be identical"
-        #else:
-        #    self.val = np.zeros_like(theta_grid) + val
+        #assert (prescription in ["spherical", "cylindrical"]), f"val must be prescibed as either Q(z/R) or Q(theta). was given Q({prescription})"
+        theta_diff = np.diff(theta_grid)
+        #assert (np.abs(np.max(theta_diff)/ np.min(theta_diff)) - 1) < 1e-3, "all theta values must be identical"
         v_ = np.zeros_like(theta_grid) + v
         if prescription == "spherical":
             self.v = v_
@@ -197,7 +194,6 @@ class ScalarField:
 
     def __add__(f, g):
         #assert np.all(np.isclose(f.theta_grid, g.theta_grid)), "need to be defined on the same domain"
-        #assert f.val.shape == g.val.shape,  f"need to have the same shape. has {f.val.shape} and {g.val.shape}"
         #assert f.a == g.a, f"need to have the same power index. has {f.a} and {g.a}"
         return ScalarField(f.v+g.v, f.a, f.theta_grid)
     
@@ -213,3 +209,6 @@ class ScalarField:
     def norm(f):
         return np.abs(f.v)
     
+    #returns data at cylendrical radius R
+    def as_cylendrical(f, R=1):
+        return (R*np.sin(f.theta_grid))**f.a*f.v

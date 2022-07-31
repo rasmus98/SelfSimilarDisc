@@ -2,13 +2,13 @@ import numba
 import numpy as np
 
 #performes central differences differentiation in theta direction
-@numba.njit
+@numba.njit(fastmath=True)
 def diff(array, dtheta):
     return (array[2:] - array[:-2])/(dtheta*2)
 
 @numba.njit
 def cylindrical_to_spherical(values, theta_grid, a):
-    return values / np.cos(theta_grid-np.pi/2)**a
+    return values * np.sin(theta_grid)**a
         
 @numba.njit
 def pad(values, amount, constant=True):
@@ -110,9 +110,9 @@ class VectorField:
     
     def cross(f, g):
         #assert np.all(np.isclose(f.theta_grid, g.theta_grid)), "need to be defined on the same domain"
-        return VectorField(f.v_theta*g.v_phi-f.v_phi*f.v_theta,
+        return VectorField(f.v_theta*g.v_phi-f.v_phi*g.v_theta,
                            f.v_phi*g.v_r-f.v_r*g.v_phi,
-                           f.v_r*g.v_theta-f.v_theta*f.v_r, 
+                           f.v_r*g.v_theta-f.v_theta*g.v_r, 
                            f.a + g.a, f.theta_grid)
     
     def __add__(f, g):
@@ -130,12 +130,17 @@ class VectorField:
         return VectorField(f.v_r**scalar, f.v_theta**scalar, f.v_phi**scalar, f.a*scalar, f.theta_grid)
     
     def unit(f):
-        #assert f.val.ndim == 2, "need to be vector field"
         norm = f.norm()
         return VectorField(f.v_r/norm, f.v_theta/norm, f.v_phi/norm, 0, f.theta_grid)
     
     def norm(f):
         return (f.v_r**2+f.v_theta**2+f.v_phi**2)**0.5
+    
+    
+    def at_coord(f, r, theta):
+        return np.array([f.r.at_coord(r, theta),
+                         f.theta.at_coord(r, theta),
+                         f.phi.at_coord(r, theta)])
 
 # represents a scale invariant vector field, and provides assosiated vector operations
 # ie a field such that f(r,theta,phi)=val(theta)*(r/r_0)**a
@@ -209,6 +214,5 @@ class ScalarField:
     def norm(f):
         return np.abs(f.v)
     
-    #returns data at cylendrical radius R
-    def as_cylendrical(f, R=1):
-        return (R*np.sin(f.theta_grid))**f.a*f.v
+    def at_coord(f, r, theta):
+        return r**f.a*np.interp(theta, f.theta_grid, f.v, left=np.nan, right=np.nan)
